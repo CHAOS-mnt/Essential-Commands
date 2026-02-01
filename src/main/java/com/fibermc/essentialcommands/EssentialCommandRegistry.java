@@ -225,6 +225,7 @@ public final class EssentialCommandRegistry {
 
             warpBuilder
                 .requires(ECPerms.require(ECPerms.Registry.warp_tp, 0))
+                .executes(new WarpTpCommand()::runDefault)
                 .then(argument("warp_name", StringArgumentType.word())
                     .suggests(WarpSuggestion.STRING_SUGGESTIONS_PROVIDER)
                     .executes(new WarpTpCommand()));
@@ -238,6 +239,7 @@ public final class EssentialCommandRegistry {
 
             warpTpBuilder
                 .requires(ECPerms.require(ECPerms.Registry.warp_tp, 0))
+                .executes(new WarpTpCommand()::runDefault)
                 .then(argument("warp_name", StringArgumentType.word())
                     .suggests(WarpSuggestion.STRING_SUGGESTIONS_PROVIDER)
                     .executes(new WarpTpCommand()));
