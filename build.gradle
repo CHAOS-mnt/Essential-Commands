@@ -88,6 +88,7 @@ allprojects {
         // See https://docs.gradle.org/current/userguide/declaring_repositories.html
         // for more information about repositories.
         maven { url 'https://maven.nucleoid.xyz' } // Used by FabricPlaceholderAPI
+        maven { url 'https://repo.opencollab.dev/main/' } // Used by Floodgate API
         maven {
             name = 'Ladysnake Mods'
             url = 'https://maven.ladysnake.org/releases'
@@ -126,6 +127,7 @@ dependencies {
 
     // mod compatibility
     modCompileOnly  "maven.modrinth:vanish:${project.vanish_version}"
+    modCompileOnly  "org.geysermc.floodgate:api:2.2.4-SNAPSHOT"
 
     subprojects.each {
         implementation project(path: ":${it.name}", configuration: "namedElements")

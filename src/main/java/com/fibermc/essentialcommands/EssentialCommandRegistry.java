@@ -83,10 +83,12 @@ public final class EssentialCommandRegistry {
             : essentialCommandsRootNode::addChild;
 
         if (CONFIG.ENABLE_TPA) {
+            TeleportAskCommand tpaCommand = new TeleportAskCommand();
             registerNode.accept(Commands.literal("tpa")
                 .requires(ECPerms.require(ECPerms.Registry.tpa, 0))
+                .executes(tpaCommand::runWithoutTarget)
                 .then(CommandUtil.targetPlayerArgument()
-                    .executes(new TeleportAskCommand()))
+                    .executes(tpaCommand))
                 .build());
 
             registerNode.accept(Commands.literal("tpcancel")
