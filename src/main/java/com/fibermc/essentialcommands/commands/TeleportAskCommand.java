@@ -43,7 +43,7 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
             FloodgateApi floodgateApi = FloodgateApi.getInstance();
             if (floodgateApi.isFloodgatePlayer(playerUUID)) {
                 // Player is from Bedrock Edition, show form
-                showPlayerSelectionForm(senderPlayer);
+                showRequestTypeSelectionForm(senderPlayer);
                 return SINGLE_SUCCESS;
             }
         } catch (Exception e) {
@@ -59,7 +59,38 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
     /**
      * Creates and sends a SimpleForm to Bedrock players for selecting a target player.
      */
-    private void showPlayerSelectionForm(ServerPlayer senderPlayer) {
+    private void showRequestTypeSelectionForm(ServerPlayer senderPlayer) {
+        try {
+            FloodgateApi floodgateApi = FloodgateApi.getInstance();
+            var senderEcText = ECText.access(senderPlayer);
+
+            SimpleForm form = SimpleForm.builder()
+                .title(senderEcText.getString("cmd.tpa.form.select_type.title"))
+                .content(senderEcText.getString("cmd.tpa.form.select_type.content"))
+                .button(senderEcText.getString("cmd.tpa.form.select_type.tpa"))
+                .button(senderEcText.getString("cmd.tpa.form.select_type.tpahere"))
+                .validResultHandler(response -> {
+                    int selectedIndex = response.clickedButtonId();
+                    if (selectedIndex == 0) {
+                        showPlayerSelectionForm(senderPlayer, TeleportRequest.Type.TPA_TO);
+                    } else if (selectedIndex == 1) {
+                        showPlayerSelectionForm(senderPlayer, TeleportRequest.Type.TPA_HERE);
+                    }
+                })
+                .build();
+
+            floodgateApi.sendForm(senderPlayer.getUUID(), form);
+        } catch (Exception e) {
+            var senderPlayerData = PlayerData.access(senderPlayer);
+            senderPlayerData.sendCommandError("cmd.tpask.error.form_failed");
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Creates and sends a SimpleForm to Bedrock players for selecting a target player.
+     */
+    private void showPlayerSelectionForm(ServerPlayer senderPlayer, TeleportRequest.Type requestType) {
         try {
             FloodgateApi floodgateApi = FloodgateApi.getInstance();
             var senderEcText = ECText.access(senderPlayer);
@@ -69,9 +100,16 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
                 .collect(Collectors.toList());
             
             // Build the SimpleForm with buttons for each player
+            String titleKey = requestType == TeleportRequest.Type.TPA_HERE
+                ? "cmd.tpaskhere.form.title"
+                : "cmd.tpask.form.title";
+            String contentKey = requestType == TeleportRequest.Type.TPA_HERE
+                ? "cmd.tpaskhere.form.content"
+                : "cmd.tpask.form.content";
+
             SimpleForm.Builder formBuilder = SimpleForm.builder()
-                .title(senderEcText.getString("cmd.tpask.form.title"))
-                .content(senderEcText.getString("cmd.tpask.form.content"));
+                .title(senderEcText.getString(titleKey))
+                .content(senderEcText.getString(contentKey));
             
             for (ServerPlayer player : onlinePlayers) {
                 formBuilder.button(player.getGameProfile().name());
@@ -82,7 +120,7 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
                     int selectedIndex = response.clickedButtonId();
                     if (selectedIndex >= 0 && selectedIndex < onlinePlayers.size()) {
                         ServerPlayer targetPlayer = onlinePlayers.get(selectedIndex);
-                        handleFormResponse(senderPlayer, targetPlayer);
+                        handleFormResponse(senderPlayer, targetPlayer, requestType);
                     }
                 })
                 .build();
@@ -100,14 +138,14 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
     /**
      * Handles the response from the SimpleForm and sends a ModalForm to the target player.
      */
-    private void handleFormResponse(ServerPlayer senderPlayer, ServerPlayer targetPlayer) {
-        sendBedrockTeleportRequest(senderPlayer, targetPlayer);
+    private void handleFormResponse(ServerPlayer senderPlayer, ServerPlayer targetPlayer, TeleportRequest.Type requestType) {
+        sendBedrockTeleportRequest(senderPlayer, targetPlayer, requestType);
     }
 
     /**
      * Sends a Bedrock modal confirmation to the target and processes acceptance/denial.
      */
-    private void sendBedrockTeleportRequest(ServerPlayer senderPlayer, ServerPlayer targetPlayer) {
+    private void sendBedrockTeleportRequest(ServerPlayer senderPlayer, ServerPlayer targetPlayer, TeleportRequest.Type requestType) {
         TeleportManager tpMgr = ManagerLocator.getInstance().getTpManager();
         var senderPlayerData = PlayerData.access(senderPlayer);
         var targetPlayerData = PlayerData.access(targetPlayer);
@@ -124,12 +162,12 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
 
         // If target isn't Bedrock, use chat flow directly
         if (!isFloodgatePlayer(targetPlayer)) {
-            sendChatTeleportRequest(senderPlayer, targetPlayer, tpMgr, senderPlayerData, targetPlayerData);
+            sendChatTeleportRequest(senderPlayer, targetPlayer, tpMgr, senderPlayerData, targetPlayerData, requestType);
             return;
         }
 
         // Start request immediately so accept can teleport
-        tpMgr.startTpRequest(senderPlayer, targetPlayer, TeleportRequest.Type.TPA_TO);
+        tpMgr.startTpRequest(senderPlayer, targetPlayer, requestType);
         var startedRequest = senderPlayerData.getSentTeleportRequests().getRequestToPlayer(targetPlayerData);
         if (startedRequest.isEmpty()) {
             senderPlayerData.sendCommandError("cmd.tpask.error.form_failed");
@@ -147,11 +185,24 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
         var targetEcText = ECText.access(targetPlayer);
         var request = startedRequest.get();
         
+        String modalTitleKey = requestType == TeleportRequest.Type.TPA_HERE
+            ? "cmd.tpaskhere.form.modal.title"
+            : "cmd.tpask.form.modal.title";
+        String modalContentKey = requestType == TeleportRequest.Type.TPA_HERE
+            ? "cmd.tpaskhere.form.modal.content"
+            : "cmd.tpask.form.modal.content";
+        String modalAcceptKey = requestType == TeleportRequest.Type.TPA_HERE
+            ? "cmd.tpaskhere.form.modal.accept"
+            : "cmd.tpask.form.modal.accept";
+        String modalDenyKey = requestType == TeleportRequest.Type.TPA_HERE
+            ? "cmd.tpaskhere.form.modal.deny"
+            : "cmd.tpask.form.modal.deny";
+
         ModalForm form = ModalForm.builder()
-            .title(targetEcText.getString("cmd.tpask.form.modal.title"))
-            .content(targetEcText.getString("cmd.tpask.form.modal.content").replace("${0}", senderName))
-            .button1(targetEcText.getString("cmd.tpask.form.modal.accept"))
-            .button2(targetEcText.getString("cmd.tpask.form.modal.deny"))
+            .title(targetEcText.getString(modalTitleKey))
+            .content(targetEcText.getString(modalContentKey).replace("${0}", senderName))
+            .button1(targetEcText.getString(modalAcceptKey))
+            .button2(targetEcText.getString(modalDenyKey))
             .validResultHandler(response -> {
                 if (response.clickedButtonId() == 0) {
                     // Player accepted - teleport now
@@ -172,8 +223,11 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
         if (!formSent) {
             // If form sending fails, use the original chat confirmation method (no new request)
             var targetPlayerProfile = PlayerProfile.access(targetPlayer);
+            String receiveKey = requestType == TeleportRequest.Type.TPA_HERE
+                ? "cmd.tpaskhere.receive"
+                : "cmd.tpask.receive";
             targetPlayerData.sendMessage(
-                "cmd.tpask.receive",
+                receiveKey,
                 senderPlayer.getDisplayName().copy().withStyle(targetPlayerProfile.getStyle(TextFormatType.Accent))
             );
 
@@ -209,17 +263,17 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
 
         // If target is Bedrock, show ModalForm instead of chat
         if (isFloodgatePlayer(targetPlayer)) {
-            sendBedrockTeleportRequest(senderPlayer, targetPlayer);
+            sendBedrockTeleportRequest(senderPlayer, targetPlayer, TeleportRequest.Type.TPA_TO);
             return SINGLE_SUCCESS;
         }
 
-        sendChatTeleportRequest(senderPlayer, targetPlayer, tpMgr, senderPlayerData, targetPlayerData);
+        sendChatTeleportRequest(senderPlayer, targetPlayer, tpMgr, senderPlayerData, targetPlayerData, TeleportRequest.Type.TPA_TO);
 
         return SINGLE_SUCCESS;
     }
 
     private void sendChatTeleportRequest(ServerPlayer senderPlayer, ServerPlayer targetPlayer, TeleportManager tpMgr,
-                                         PlayerData senderPlayerData, PlayerData targetPlayerData) {
+                                         PlayerData senderPlayerData, PlayerData targetPlayerData, TeleportRequest.Type requestType) {
         // Don't allow spamming same target
         var existingTeleportRequest = senderPlayerData.getSentTeleportRequests()
             .getRequestToPlayer(targetPlayerData);
@@ -233,8 +287,11 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
         // inform target player of tp request via chat
         var targetPlayerEcText = ECText.access(targetPlayer);
         var targetPlayerProfile = PlayerProfile.access(targetPlayer);
+        String receiveKey = requestType == TeleportRequest.Type.TPA_HERE
+            ? "cmd.tpaskhere.receive"
+            : "cmd.tpask.receive";
         targetPlayerData.sendMessage(
-            "cmd.tpask.receive",
+            receiveKey,
             senderPlayer.getDisplayName().copy().withStyle(targetPlayerProfile.getStyle(TextFormatType.Accent))
         );
 
@@ -248,7 +305,7 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
         ).send();
 
         // Mark TPRequest Sender as having requested a teleport
-        tpMgr.startTpRequest(senderPlayer, targetPlayer, TeleportRequest.Type.TPA_TO);
+        tpMgr.startTpRequest(senderPlayer, targetPlayer, requestType);
 
         // inform command sender that request has been sent
         var senderPlayerProfile = PlayerProfile.access(senderPlayer);
