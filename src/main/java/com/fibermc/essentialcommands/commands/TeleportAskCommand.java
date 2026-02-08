@@ -101,6 +101,13 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
      * Handles the response from the SimpleForm and sends a ModalForm to the target player.
      */
     private void handleFormResponse(ServerPlayer senderPlayer, ServerPlayer targetPlayer) {
+        sendBedrockTeleportRequest(senderPlayer, targetPlayer);
+    }
+
+    /**
+     * Sends a Bedrock modal confirmation to the target and processes acceptance/denial.
+     */
+    private void sendBedrockTeleportRequest(ServerPlayer senderPlayer, ServerPlayer targetPlayer) {
         TeleportManager tpMgr = ManagerLocator.getInstance().getTpManager();
         var senderPlayerData = PlayerData.access(senderPlayer);
         var targetPlayerData = PlayerData.access(targetPlayer);
@@ -115,10 +122,30 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
             return;
         }
 
+        // If target isn't Bedrock, use chat flow directly
+        if (!isFloodgatePlayer(targetPlayer)) {
+            sendChatTeleportRequest(senderPlayer, targetPlayer, tpMgr, senderPlayerData, targetPlayerData);
+            return;
+        }
+
+        // Start request immediately so accept can teleport
+        tpMgr.startTpRequest(senderPlayer, targetPlayer, TeleportRequest.Type.TPA_TO);
+        var startedRequest = senderPlayerData.getSentTeleportRequests().getRequestToPlayer(targetPlayerData);
+        if (startedRequest.isEmpty()) {
+            senderPlayerData.sendCommandError("cmd.tpask.error.form_failed");
+            return;
+        }
+
+        // Inform command sender that request has been sent
+        var senderPlayerProfile = PlayerProfile.access(senderPlayer);
+        var targetPlayerText = targetPlayer.getDisplayName().copy().withStyle(senderPlayerProfile.getStyle(TextFormatType.Accent));
+        senderPlayerData.sendCommandFeedback("cmd.tpask.send", targetPlayerText);
+
         // Send ModalForm to target player asking for confirmation
         FloodgateApi floodgateApi = FloodgateApi.getInstance();
         String senderName = senderPlayer.getGameProfile().name();
         var targetEcText = ECText.access(targetPlayer);
+        var request = startedRequest.get();
         
         ModalForm form = ModalForm.builder()
             .title(targetEcText.getString("cmd.tpask.form.modal.title"))
@@ -127,10 +154,14 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
             .button2(targetEcText.getString("cmd.tpask.form.modal.deny"))
             .validResultHandler(response -> {
                 if (response.clickedButtonId() == 0) {
-                    // Player accepted - proceed with teleport request
-                    proceedWithTeleportRequest(senderPlayer, targetPlayer, tpMgr, senderPlayerData, targetPlayerData);
+                    // Player accepted - teleport now
+                    request.queue();
+                    request.end();
+                    senderPlayerData.sendMessage("cmd.tpaccept.feedback");
+                    targetPlayerData.sendMessage("cmd.tpaccept.feedback");
                 } else {
                     // Player denied
+                    request.end();
                     senderPlayerData.sendMessage("cmd.tpask.denied", targetPlayer.getDisplayName());
                     targetPlayerData.sendMessage("cmd.tpask.you_denied", senderPlayer.getDisplayName());
                 }
@@ -139,7 +170,7 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
         
         boolean formSent = floodgateApi.sendForm(targetPlayer.getUUID(), form);
         if (!formSent) {
-            // If form sending fails, use the original chat confirmation method
+            // If form sending fails, use the original chat confirmation method (no new request)
             var targetPlayerProfile = PlayerProfile.access(targetPlayer);
             targetPlayerData.sendMessage(
                 "cmd.tpask.receive",
@@ -153,29 +184,7 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
                 targetEcText.accent("[" + ECText.getInstance().getString("generic.accept") + "]"),
                 targetEcText.error("[" + ECText.getInstance().getString("generic.deny") + "]")
             ).send();
-
-            tpMgr.startTpRequest(senderPlayer, targetPlayer, TeleportRequest.Type.TPA_TO);
-            var senderPlayerProfile = PlayerProfile.access(senderPlayer);
-            var targetPlayerText = targetPlayer.getDisplayName().copy().withStyle(senderPlayerProfile.getStyle(TextFormatType.Accent));
-            senderPlayerData.sendCommandFeedback("cmd.tpask.send", targetPlayerText);
         }
-    }
-
-    /**
-     * Proceeds with the teleport request after confirmation.
-     */
-    private void proceedWithTeleportRequest(ServerPlayer senderPlayer, ServerPlayer targetPlayer, TeleportManager tpMgr,
-                                           PlayerData senderPlayerData, PlayerData targetPlayerData) {
-        // Mark TPRequest Sender as having requested a teleport
-        tpMgr.startTpRequest(senderPlayer, targetPlayer, TeleportRequest.Type.TPA_TO);
-
-        // Inform command sender that request has been sent
-        var senderPlayerProfile = PlayerProfile.access(senderPlayer);
-        var targetPlayerText = targetPlayer.getDisplayName().copy().withStyle(senderPlayerProfile.getStyle(TextFormatType.Accent));
-        senderPlayerData.sendCommandFeedback("cmd.tpask.send", targetPlayerText);
-        
-        // Inform target player
-        targetPlayerData.sendMessage("cmd.tpask.accepted", senderPlayer.getDisplayName());
     }
 
     @Override
@@ -198,7 +207,30 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
             }
         }
 
-        //inform target player of tp request via chat
+        // If target is Bedrock, show ModalForm instead of chat
+        if (isFloodgatePlayer(targetPlayer)) {
+            sendBedrockTeleportRequest(senderPlayer, targetPlayer);
+            return SINGLE_SUCCESS;
+        }
+
+        sendChatTeleportRequest(senderPlayer, targetPlayer, tpMgr, senderPlayerData, targetPlayerData);
+
+        return SINGLE_SUCCESS;
+    }
+
+    private void sendChatTeleportRequest(ServerPlayer senderPlayer, ServerPlayer targetPlayer, TeleportManager tpMgr,
+                                         PlayerData senderPlayerData, PlayerData targetPlayerData) {
+        // Don't allow spamming same target
+        var existingTeleportRequest = senderPlayerData.getSentTeleportRequests()
+            .getRequestToPlayer(targetPlayerData);
+        if (existingTeleportRequest.isPresent()) {
+            senderPlayerData.sendCommandError(
+                "cmd.tpask.error.exists",
+                existingTeleportRequest.get().getTargetPlayer().getDisplayName());
+            return;
+        }
+
+        // inform target player of tp request via chat
         var targetPlayerEcText = ECText.access(targetPlayer);
         var targetPlayerProfile = PlayerProfile.access(targetPlayer);
         targetPlayerData.sendMessage(
@@ -215,14 +247,21 @@ public class TeleportAskCommand implements Command<CommandSourceStack> {
             targetPlayerEcText.error("[" + ECText.getInstance().getString("generic.deny") + "]")
         ).send();
 
-        //Mark TPRequest Sender as having requested a teleport
+        // Mark TPRequest Sender as having requested a teleport
         tpMgr.startTpRequest(senderPlayer, targetPlayer, TeleportRequest.Type.TPA_TO);
 
-        //inform command sender that request has been sent
+        // inform command sender that request has been sent
         var senderPlayerProfile = PlayerProfile.access(senderPlayer);
         var targetPlayerText = targetPlayer.getDisplayName().copy().withStyle(senderPlayerProfile.getStyle(TextFormatType.Accent));
         senderPlayerData.sendCommandFeedback("cmd.tpask.send", targetPlayerText);
+    }
 
-        return SINGLE_SUCCESS;
+    private boolean isFloodgatePlayer(ServerPlayer player) {
+        try {
+            FloodgateApi floodgateApi = FloodgateApi.getInstance();
+            return floodgateApi.isFloodgatePlayer(player.getUUID());
+        } catch (Exception e) {
+            return false;
+        }
     }
 }
